@@ -2,6 +2,7 @@ use crate::errors::{CrawdadError, Result};
 use crate::mapper::CodeMapper;
 use crate::{utils, MpTrie, Node, Trie};
 use crate::{END_CODE, END_MARKER, INVALID_IDX, MAX_VALUE, OFFSET_MASK};
+use crate::bpxcheck::Bitmap64;
 
 use core::cmp::Ordering;
 

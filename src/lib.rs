@@ -21,6 +21,7 @@ mod mapper;
 pub mod mptrie;
 pub mod trie;
 mod utils;
+mod bpxcheck;
 
 use core::ops::Range;
 
