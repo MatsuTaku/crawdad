@@ -2,7 +2,7 @@ use crate::errors::{CrawdadError, Result};
 use crate::mapper::CodeMapper;
 use crate::{utils, MpTrie, Node, Trie};
 use crate::{END_CODE, END_MARKER, INVALID_IDX, MAX_VALUE, OFFSET_MASK};
-use crate::bpxcheck::Bitmap64;
+use crate::bpxcheck::BPXChecker;
 
 use core::cmp::Ordering;
 
@@ -29,6 +29,7 @@ pub struct Builder {
     labels: Vec<u32>,
     head_idx: u32,
     block_len: u32,
+    xchecker: BPXChecker,
 }
 
 impl Builder {
@@ -176,6 +177,7 @@ impl Builder {
         self.nodes.clear();
         self.nodes
             .resize(usize::try_from(self.block_len).unwrap(), Node::default());
+        self.xchecker.resize(usize::try_from(self.block_len).unwrap());
 
         for i in 0..self.block_len {
             if i == 0 {
@@ -294,7 +296,7 @@ impl Builder {
     }
 
     fn define_nodes(&mut self, node_idx: u32) -> Result<u32> {
-        let base = self.find_base(&self.labels);
+        let base = self.find_base_collectively(&self.labels);
         if base >= self.num_nodes() {
             self.enlarge()?;
         }
@@ -329,6 +331,32 @@ impl Builder {
         self.num_nodes() ^ labels[0]
     }
 
+    fn find_base_collectively(&self, labels: &[u32]) -> u32 {
+        debug_assert!(!labels.is_empty());
+
+        if self.head_idx == INVALID_IDX {
+            return self.num_nodes() ^ labels[0];
+        }
+
+        let mut node_idx = self.head_idx;
+        loop {
+            let base_origin = node_idx ^ labels[0];
+            if let Some(base) = self.xchecker.verify_base_collectively(base_origin, labels) {
+                return base;
+            }
+            if BPXChecker::word_index(node_idx) + 1 == self.xchecker.bitmap.len() as u32 {
+                break;
+            }
+            let current_bitmap = self.xchecker.get_word(BPXChecker::word_index(base_origin));
+            let block_last_vacant_offset = BPXChecker::BITS - 1 - current_bitmap.leading_ones();
+            node_idx = self.get_next(node_idx & BPXChecker::BASE_MASK + block_last_vacant_offset);
+            if node_idx == self.head_idx {
+                break;
+            }
+        }
+        self.num_nodes() ^ labels[0]
+    }
+
     #[inline(always)]
     fn verify_base(&self, base: u32, labels: &[u32]) -> bool {
         for &label in labels {
@@ -350,6 +378,7 @@ impl Builder {
         self.set_next(prev, next);
         self.set_prev(next, prev);
         self.set_fixed(node_idx);
+        self.xchecker.set_fixed(node_idx);
 
         if self.head_idx == node_idx {
             if next == node_idx {
@@ -373,6 +402,7 @@ impl Builder {
             self.set_next(i, i + 1);
             self.set_prev(i, i - 1);
         }
+        self.xchecker.resize(new_len as usize);
 
         if self.head_idx == INVALID_IDX {
             self.set_prev(old_len, new_len - 1);
