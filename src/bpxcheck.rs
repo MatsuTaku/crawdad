@@ -9,6 +9,7 @@ pub struct BPXChecker {
 impl BPXChecker {
     pub const BITS: u32 = u64::BITS;
 
+    #[inline(always)]
     const fn word_filled_by(bit: bool) -> u64 {
         if bit { !0u64 } else { 0u64 }
     }
@@ -17,14 +18,17 @@ impl BPXChecker {
         (len + BPXChecker::BITS as usize - 1) / BPXChecker::BITS as usize
     }
 
+    #[inline(always)]
     pub fn word_index(i: u32) -> u32 {
         i / BPXChecker::BITS
     }
 
+    #[inline(always)]
     fn word_offset(i: u32) -> u32 {
         i % BPXChecker::BITS
     }
 
+    #[inline(always)]
     fn index_pair(i: u32) -> (u32, u32) {
         (BPXChecker::word_index(i), BPXChecker::word_offset(i))
     }
@@ -37,13 +41,18 @@ impl BPXChecker {
 
     #[inline(always)]
     pub fn get_word(&self, wi: u32) -> u64 {
-        if wi & OFFSET_MASK != 0 {
+        if wi & !OFFSET_MASK != 0 {
             BPXChecker::word_filled_by(true)
         } else if wi as usize >= self.bitmap.len() {
             BPXChecker::word_filled_by(false)
         } else {
             self.bitmap[wi as usize]
         }
+    }
+
+    pub fn is_fixed(&self, i: u32) -> bool {
+        let (q, r) = BPXChecker::index_pair(i);
+        self.get_word(q) & (1u64 << r) != 0
     }
 
     #[inline(always)]
@@ -64,11 +73,10 @@ impl BPXChecker {
         0x0000FFFF0000FFFFu64,
         0x00000000FFFFFFFFu64, // never used
     ];
-    const NO_CANDIDATE: u64 = BPXChecker::word_filled_by(true);
-    pub const BASE_MASK: u32 = !(BPXChecker::BITS - 1);
+    pub const NO_CANDIDATE: u64 = BPXChecker::word_filled_by(true);
 
     #[inline(always)]
-    pub fn find_base_collectively(&self, base_origin: u32, labels: &[u32]) -> u64 {
+    pub fn disabled_base_mask(&self, base_origin: u32, labels: &[u32]) -> u64 {
         debug_assert_eq!(base_origin % BPXChecker::BITS, 0);
 
         let mut x = 0u64;
@@ -92,12 +100,14 @@ impl BPXChecker {
         x
     }
 
+    pub const BASE_MASK: u32 = !(BPXChecker::BITS - 1);
+
     #[inline(always)]
-    pub fn verify_base_collectively(&self, base_origin: u32, labels: &[u32]) -> Option<u32> {
+    pub fn find_base_for_64adjacent(&self, base_origin: u32, labels: &[u32]) -> Option<u32> {
         let base_front = base_origin & BPXChecker::BASE_MASK;
-        let x = self.find_base_collectively(base_front, labels);
+        let x = self.disabled_base_mask(base_front, labels);
         if x != BPXChecker::NO_CANDIDATE {
-            Some(base_front ^ x.trailing_ones())
+            Some(base_front ^ x.trailing_ones()) // Return one of the candidate
         } else {
             None
         }
@@ -109,7 +119,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_find_base_collectively() {
+    fn test_find_base_64adjacent() {
         let map = [1,0,0,1,0,0,1,0,1,0,1,0,0,0,1,0,0,0,0,1,0,0,1,0,1,0,0,0,0,0,1,1,0,0,0,1,0,1,0,0,0,1,0,1,0,1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1];
         let labels = [1, 3, 7, 9, 11, 23, 41];
         let expected_bases = [6, 14, 37, 45, 51, 57];
@@ -120,10 +130,10 @@ mod tests {
                 xc.set_fixed(i as u32);
             }
         }
-        let x = xc.find_base_collectively(0, &labels);
+        let x = xc.disabled_base_mask(0, &labels);
         let mut candidate = vec![];
         for i in 0..64 {
-            if (1u64 << i) & x == 0 {
+            if x & (1u64 << i) == 0 {
                 candidate.push(i);
             }
         }

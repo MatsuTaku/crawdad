@@ -296,7 +296,7 @@ impl Builder {
     }
 
     fn define_nodes(&mut self, node_idx: u32) -> Result<u32> {
-        let base = self.find_base_collectively(&self.labels);
+        let base = self.find_base_bitparallel(&self.labels);
         if base >= self.num_nodes() {
             self.enlarge()?;
         }
@@ -310,6 +310,7 @@ impl Builder {
         Ok(base)
     }
 
+    #[allow(dead_code)]
     fn find_base(&self, labels: &[u32]) -> u32 {
         debug_assert!(!labels.is_empty());
 
@@ -331,7 +332,7 @@ impl Builder {
         self.num_nodes() ^ labels[0]
     }
 
-    fn find_base_collectively(&self, labels: &[u32]) -> u32 {
+    fn find_base_bitparallel(&self, labels: &[u32]) -> u32 {
         debug_assert!(!labels.is_empty());
 
         if self.head_idx == INVALID_IDX {
@@ -340,16 +341,19 @@ impl Builder {
 
         let mut node_idx = self.head_idx;
         loop {
-            let base_origin = node_idx ^ labels[0];
-            if let Some(base) = self.xchecker.verify_base_collectively(base_origin, labels) {
+            if let Some(base) = self.xchecker.find_base_for_64adjacent(node_idx ^ labels[0], labels) {
                 return base;
             }
+            // Follow the empty-link from the last unfixed index of the current window
             if BPXChecker::word_index(node_idx) + 1 == self.xchecker.bitmap.len() as u32 {
+                // The last window. This check is important for block_len less than 64
                 break;
             }
-            let current_bitmap = self.xchecker.get_word(BPXChecker::word_index(base_origin));
-            let block_last_vacant_offset = BPXChecker::BITS - 1 - current_bitmap.leading_ones();
-            node_idx = self.get_next(node_idx & BPXChecker::BASE_MASK + block_last_vacant_offset);
+            let fixed_mask = self.xchecker.get_word(BPXChecker::word_index(node_idx));
+            let last_unfixed_offset = BPXChecker::BITS - 1 - fixed_mask.leading_ones();
+            let last_unfixed_idx = node_idx & BPXChecker::BASE_MASK ^ (last_unfixed_offset);
+            debug_assert!(!self.is_fixed(last_unfixed_idx));
+            node_idx = self.get_next(last_unfixed_idx);
             if node_idx == self.head_idx {
                 break;
             }
@@ -358,6 +362,7 @@ impl Builder {
     }
 
     #[inline(always)]
+    #[allow(dead_code)]
     fn verify_base(&self, base: u32, labels: &[u32]) -> bool {
         for &label in labels {
             let node_idx = base ^ label;
