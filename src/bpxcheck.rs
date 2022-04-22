@@ -1,6 +1,12 @@
 use alloc::vec::Vec;
 use crate::{INVALID_IDX, OFFSET_MASK};
 
+/// A Bit-Parallel-XChecker allows for X_CHECK (find_base) operation faster than a simple double-loop algorithm
+///   ** with N bit additional space ** where N is length of a Double-Array.
+/// This algorithm, named BPXCheck, collectively verifies 64 adjacent "base" candidates in O( C log W ) times
+///   where W is word length of computer, a.k.a. 64,
+///   and C is number of children of an input node.
+/// In addition, BPXCheck can be easily combined with Empty-Linking-Method.
 #[derive(Default)]
 pub struct BPXChecker {
     pub bitmap: Vec<u64>,
@@ -110,7 +116,7 @@ impl BPXChecker {
         let base_front = base_origin & BPXChecker::BASE_MASK;
         let x = self.disabled_base_mask(base_front, labels);
         if x != BPXChecker::NO_CANDIDATE {
-            base_front ^ x.trailing_ones() // Return one of the candidate
+            base_front ^ x.trailing_ones() // Return one of the candidates
         } else {
             INVALID_IDX
         }
@@ -137,15 +143,15 @@ mod tests {
             assert_eq!(xc.is_fixed(i as u32), map[i] != 0);
         }
         let x = xc.disabled_base_mask(0, &labels);
-        let mut candidate = vec![];
+        let mut base_candidates = vec![];
         for i in 0..64 {
             if x & (1u64 << i) == 0 {
-                candidate.push(i);
+                base_candidates.push(i);
             }
         }
-        assert_eq!(expected_bases.len(), candidate.len());
+        assert_eq!(expected_bases.len(), base_candidates.len());
         for i in 0..expected_bases.len() {
-            assert_eq!(expected_bases[i], candidate[i]);
+            assert_eq!(expected_bases[i], base_candidates[i]);
         }
     }
 }
