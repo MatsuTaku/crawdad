@@ -3,7 +3,7 @@ use crate::{INVALID_IDX, OFFSET_MASK};
 
 /// A Bit-Parallel-XChecker allows for X_CHECK (find_base) operation faster than a simple double-loop algorithm
 ///   ** with N bit additional space ** where N is length of a Double-Array.
-/// This algorithm, named BPXCheck, collectively verifies 64 adjacent "base" candidates in O( C log W ) times
+/// This algorithm, named BPXCheck, collectively verifies W-adjacent "base" candidates in O( C log W ) times
 ///   where W is word length of computer, a.k.a. 64,
 ///   and C is number of children of an input node.
 /// In addition, BPXCheck can be easily combined with Empty-Linking-Method.
@@ -48,7 +48,7 @@ impl BPXChecker {
 
     #[inline(always)]
     pub fn get_word(&self, wi: u32) -> u64 {
-        if wi & !OFFSET_MASK != 0 {
+        if wi & !(OFFSET_MASK >> 6) != 0 {
             BPXChecker::word_filled_by(true)
         } else if wi as usize >= self.bitmap.len() {
             BPXChecker::word_filled_by(false)
