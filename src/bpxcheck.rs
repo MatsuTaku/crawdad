@@ -109,11 +109,11 @@ impl BPXChecker {
         x
     }
 
-    pub const BASE_MASK: u32 = !(BPXChecker::BITS - 1);
+    pub const BASE_FRONT_MASK: u32 = !(BPXChecker::BITS - 1);
 
     #[inline(always)]
     pub fn find_base_for_64adjacent(&self, base_origin: u32, labels: &[u32]) -> u32 {
-        let base_front = base_origin & BPXChecker::BASE_MASK;
+        let base_front = base_origin & BPXChecker::BASE_FRONT_MASK;
         let x = self.disabled_base_mask(base_front, labels);
         if x != BPXChecker::NO_CANDIDATE {
             base_front ^ x.trailing_ones() // Return one of the candidates

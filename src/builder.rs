@@ -345,19 +345,23 @@ impl Builder {
             if base != INVALID_IDX {
                 return base;
             }
-            // Follow the empty-link from the last unfixed index of the current window
             if BPXChecker::word_index(node_idx) + 1 == self.xchecker.bitmap.len() as u32 {
-                // The last window. This check is important for block_len less than 64
                 break;
             }
+            // A. Sequential shift (faster in practical use)
+            node_idx += BPXChecker::BITS;
+            // B. Combine with Empty-Link
+            /*
+            // Follow the empty-link from the last unfixed index of the current window
             let fixed_mask = self.xchecker.get_word(BPXChecker::word_index(node_idx));
             let last_unfixed_offset = BPXChecker::BITS - 1 - fixed_mask.leading_ones();
-            let last_unfixed_idx = node_idx & BPXChecker::BASE_MASK ^ last_unfixed_offset;
+            let last_unfixed_idx = node_idx & BPXChecker::BASE_FRONT_MASK ^ last_unfixed_offset;
             debug_assert!(!self.is_fixed(last_unfixed_idx));
             node_idx = self.get_next(last_unfixed_idx);
             if node_idx == self.head_idx {
                 break;
             }
+             */
         }
         self.num_nodes() ^ labels[0]
     }
