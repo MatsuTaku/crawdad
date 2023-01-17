@@ -87,6 +87,7 @@ mod mapper;
 pub mod mptrie;
 pub mod trie;
 mod utils;
+mod bpxcheck;
 
 pub(crate) const OFFSET_MASK: u32 = 0x7fff_ffff;
 pub(crate) const INVALID_IDX: u32 = 0xffff_ffff;

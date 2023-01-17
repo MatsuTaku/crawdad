@@ -2,6 +2,7 @@ use crate::errors::{CrawdadError, Result};
 use crate::mapper::CodeMapper;
 use crate::{utils, MpTrie, Node, Trie};
 use crate::{END_CODE, END_MARKER, INVALID_IDX, MAX_VALUE, OFFSET_MASK};
+use crate::bpxcheck::BPXChecker;
 
 use core::cmp::Ordering;
 
@@ -31,6 +32,7 @@ pub struct Builder {
     head_idx: u32,
     block_len: u32,
     num_free_blocks: u32,
+    xchecker: BPXChecker,
 }
 
 impl Default for Builder {
@@ -44,6 +46,7 @@ impl Default for Builder {
             head_idx: 0,
             block_len: 0,
             num_free_blocks: DEFAULT_NUM_FREE_BLOCKS,
+            xchecker: BPXChecker::default(),
         }
     }
 }
@@ -195,6 +198,7 @@ impl Builder {
         self.nodes.clear();
         self.nodes
             .resize(usize::try_from(self.block_len).unwrap(), Node::default());
+        self.xchecker.resize(usize::try_from(self.block_len).unwrap());
 
         for i in 0..self.block_len {
             if i == 0 {
@@ -311,7 +315,7 @@ impl Builder {
     }
 
     fn define_nodes(&mut self, node_idx: u32) -> Result<u32> {
-        let base = self.find_base(&self.labels);
+        let base = self.find_base_bitparallel(&self.labels);
         if base >= self.num_nodes() {
             self.enlarge()?;
         }
@@ -325,6 +329,7 @@ impl Builder {
         Ok(base)
     }
 
+    #[allow(dead_code)]
     fn find_base(&self, labels: &[u32]) -> u32 {
         debug_assert!(!labels.is_empty());
 
@@ -346,7 +351,42 @@ impl Builder {
         self.num_nodes() ^ labels[0]
     }
 
+    fn find_base_bitparallel(&self, labels: &[u32]) -> u32 {
+        debug_assert!(!labels.is_empty());
+
+        if self.head_idx == INVALID_IDX {
+            return self.num_nodes() ^ labels[0];
+        }
+
+        let mut node_idx = self.head_idx;
+        loop {
+            let base = self.xchecker.find_base_for_64adjacent(node_idx ^ labels[0], labels);
+            if base != INVALID_IDX {
+                return base;
+            }
+            if BPXChecker::word_index(node_idx) + 1 == self.xchecker.bitmap.len() as u32 {
+                break;
+            }
+            // A. Sequential shift (faster in practical use)
+            node_idx += BPXChecker::BITS;
+            // B. Combine with Empty-Link
+            /*
+            // Follow the empty-link from the last unfixed index of the current window
+            let fixed_mask = self.xchecker.get_word(BPXChecker::word_index(node_idx));
+            let last_unfixed_offset = BPXChecker::BITS - 1 - fixed_mask.leading_ones();
+            let last_unfixed_idx = node_idx & BPXChecker::BASE_FRONT_MASK ^ last_unfixed_offset;
+            debug_assert!(!self.is_fixed(last_unfixed_idx));
+            node_idx = self.get_next(last_unfixed_idx);
+            if node_idx == self.head_idx {
+                break;
+            }
+             */
+        }
+        self.num_nodes() ^ labels[0]
+    }
+
     #[inline(always)]
+    #[allow(dead_code)]
     fn verify_base(&self, base: u32, labels: &[u32]) -> bool {
         for &label in labels {
             let node_idx = base ^ label;
@@ -367,6 +407,7 @@ impl Builder {
         self.set_next(prev, next);
         self.set_prev(next, prev);
         self.set_fixed(node_idx);
+        self.xchecker.set_fixed(node_idx);
 
         if self.head_idx == node_idx {
             if next == node_idx {
@@ -395,6 +436,7 @@ impl Builder {
             self.set_next(i, i + 1);
             self.set_prev(i, i - 1);
         }
+        self.xchecker.resize(new_len as usize);
 
         if self.head_idx == INVALID_IDX {
             self.set_prev(old_len, new_len - 1);
