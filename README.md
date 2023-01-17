@@ -10,7 +10,11 @@ Crawdad is a library of natural language dictionaries using character-wise doubl
 The implementation is optimized for strings of multibyte-characters,
 and you can enjoy fast text processing on strings such as Japanese or Chinese.
 
-Experimental results can be found in [Wiki](https://github.com/daac-tools/crawdad/wiki/Performance-Comparison).
+For example, on a large Japanese dictionary of IPADIC+Neologd, Crawdad has a better time-space tradeoff than other Rust libraries.
+
+![](./figures/neologd.svg)
+
+The detailed experimental settings and other results are available on [Wiki](https://github.com/daac-tools/crawdad/wiki/Performance-Comparison).
 
 ### What can do
 
@@ -20,26 +24,10 @@ Experimental results can be found in [Wiki](https://github.com/daac-tools/crawda
 
 ### Data structures
 
-Crawdad contains the three trie implementations:
+Crawdad contains the two trie implementations:
 
 - `crawdad::Trie` is a standard trie form that often provides the fastest queries.
 - `crawdad::MpTrie` is a minimal-prefix trie form that is memory-efficient for long strings. 
-
-## Installation
-
-To use `crawdad`, depend on it in your Cargo manifest:
-
-```toml
-# Cargo.toml
-
-[dependencies]
-crawdad = "0.1"
-```
-
-## Disclaimer
-
-This software is developed by LegalForce, Inc.,
-but not an officially supported LegalForce product.
 
 ## License
 
@@ -53,6 +41,10 @@ Licensed under either of
 at your option.
 
 For softwares under `bench/data`, follow the license terms of each software.
+
+## Acknowledgment
+
+The initial version of this software was developed by LegalForce, Inc., but not an officially supported LegalForce product.
 
 ## Contribution
 

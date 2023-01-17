@@ -5,8 +5,6 @@ use std::io::BufReader;
 use std::path::Path;
 use std::time::Instant;
 
-use crawdad::Statistics;
-
 use clap::Parser;
 
 const TRIALS: usize = 10;
@@ -36,8 +34,7 @@ fn main() {
         println!("texts_filename: {}", &texts_filename);
         load_file(&texts_filename)
     });
-
-    println!("#keys: {}", keys.len());
+    keys_stat(&keys);
 
     {
         println!("[crawdad/trie]");
@@ -47,7 +44,10 @@ fn main() {
         print_heap_bytes(trie.heap_bytes());
         println!("num_elems: {}", trie.num_elems());
         println!("num_vacants: {}", trie.num_vacants());
-        println!("vacant_ratio: {:.3}", trie.vacant_ratio());
+        println!(
+            "vacant_ratio: {:.3}",
+            trie.num_vacants() as f64 / trie.num_elems() as f64
+        );
         println!("construction: {:.3} [sec]", duration.as_secs_f64());
 
         {
@@ -67,13 +67,14 @@ fn main() {
         if let Some(texts) = texts.as_ref() {
             // Warmup
             let mut dummy = 0;
-            let mut searcher = trie.common_prefix_searcher();
+            let mut haystack = vec![];
             let elapsed_sec = measure(TRIALS, || {
                 for text in texts {
-                    searcher.update_haystack(text.chars());
-                    for i in 0..searcher.len_chars() {
-                        for m in searcher.search(i) {
-                            dummy += m.end_bytes() + m.value() as usize;
+                    haystack.clear();
+                    haystack.extend(text.chars());
+                    for i in 0..haystack.len() {
+                        for (v, j) in trie.common_prefix_search(haystack[i..].iter().copied()) {
+                            dummy += j + v as usize;
                         }
                     }
                 }
@@ -94,7 +95,10 @@ fn main() {
         print_heap_bytes(trie.heap_bytes());
         println!("num_elems: {}", trie.num_elems());
         println!("num_vacants: {}", trie.num_vacants());
-        println!("vacant_ratio: {:.3}", trie.vacant_ratio());
+        println!(
+            "vacant_ratio: {:.3}",
+            trie.num_vacants() as f64 / trie.num_elems() as f64
+        );
         println!("construction: {:.3} [sec]", duration.as_secs_f64());
 
         {
@@ -114,13 +118,14 @@ fn main() {
         if let Some(texts) = texts.as_ref() {
             // Warmup
             let mut dummy = 0;
-            let mut searcher = trie.common_prefix_searcher();
+            let mut haystack = vec![];
             let elapsed_sec = measure(TRIALS, || {
                 for text in texts {
-                    searcher.update_haystack(text.chars());
-                    for i in 0..searcher.len_chars() {
-                        for m in searcher.search(i) {
-                            dummy += m.end_bytes() + m.value() as usize;
+                    haystack.clear();
+                    haystack.extend(text.chars());
+                    for i in 0..haystack.len() {
+                        for (v, j) in trie.common_prefix_search(haystack[i..].iter().copied()) {
+                            dummy += j + v as usize;
                         }
                     }
                 }
@@ -128,6 +133,81 @@ fn main() {
             println!(
                 "enumeration: {:.3} [us/text]",
                 to_us(elapsed_sec) / texts.len() as f64
+            );
+            println!("dummy: {}", dummy);
+        }
+    }
+
+    {
+        println!("[std/BTreeMap]");
+        let start = Instant::now();
+        let mut map = std::collections::BTreeMap::new();
+        for (i, key) in keys.iter().enumerate() {
+            map.insert(key, i as u32);
+        }
+        let duration = start.elapsed();
+        println!("construction: {:.3} [sec]", duration.as_secs_f64());
+
+        {
+            let mut dummy = 0;
+            let elapsed_sec = measure(TRIALS, || {
+                for query in &queries {
+                    dummy += map.get(query).unwrap();
+                }
+            });
+            println!(
+                "exact_match: {:.3} [ns/query]",
+                to_ns(elapsed_sec) / queries.len() as f64
+            );
+            println!("dummy: {}", dummy);
+        }
+    }
+
+    {
+        println!("[std/HashMap]");
+        let start = Instant::now();
+        let mut map = std::collections::HashMap::new();
+        for (i, key) in keys.iter().enumerate() {
+            map.insert(key, i as u32);
+        }
+        let duration = start.elapsed();
+        println!("construction: {:.3} [sec]", duration.as_secs_f64());
+
+        {
+            let mut dummy = 0;
+            let elapsed_sec = measure(TRIALS, || {
+                for query in &queries {
+                    dummy += map.get(query).unwrap();
+                }
+            });
+            println!(
+                "exact_match: {:.3} [ns/query]",
+                to_ns(elapsed_sec) / queries.len() as f64
+            );
+            println!("dummy: {}", dummy);
+        }
+    }
+
+    {
+        println!("[hashbrown/HashMap]");
+        let start = Instant::now();
+        let mut map = hashbrown::HashMap::new();
+        for (i, key) in keys.iter().enumerate() {
+            map.insert(key, i as u32);
+        }
+        let duration = start.elapsed();
+        println!("construction: {:.3} [sec]", duration.as_secs_f64());
+
+        {
+            let mut dummy = 0;
+            let elapsed_sec = measure(TRIALS, || {
+                for query in &queries {
+                    dummy += map.get(query).unwrap();
+                }
+            });
+            println!(
+                "exact_match: {:.3} [ns/query]",
+                to_ns(elapsed_sec) / queries.len() as f64
             );
             println!("dummy: {}", dummy);
         }
@@ -236,7 +316,7 @@ fn main() {
     {
         println!("[daachorse/bytewise]");
         let start = Instant::now();
-        let pma = daachorse::DoubleArrayAhoCorasick::new(&keys).unwrap();
+        let pma = daachorse::DoubleArrayAhoCorasick::<u32>::new(&keys).unwrap();
         let duration = start.elapsed();
         print_heap_bytes(pma.heap_bytes());
         println!("construction: {:.3} [sec]", duration.as_secs_f64());
@@ -262,7 +342,7 @@ fn main() {
     {
         println!("[daachorse/charwise]");
         let start = Instant::now();
-        let pma = daachorse::charwise::CharwiseDoubleArrayAhoCorasick::new(&keys).unwrap();
+        let pma = daachorse::CharwiseDoubleArrayAhoCorasick::<u32>::new(&keys).unwrap();
         let duration = start.elapsed();
         print_heap_bytes(pma.heap_bytes());
         println!("construction: {:.3} [sec]", duration.as_secs_f64());
@@ -358,4 +438,24 @@ fn to_us(sec: f64) -> f64 {
 #[allow(dead_code)]
 fn to_ns(sec: f64) -> f64 {
     sec * 1_000_000_000.
+}
+
+fn keys_stat(keys: &[String]) {
+    let totlen_byte = keys.iter().fold(0, |acc, k| acc + k.bytes().len());
+    let totlen_char = keys.iter().fold(0, |acc, k| acc + k.chars().count());
+    let filesize = totlen_byte + keys.len(); // with '\n'
+    println!(
+        "filesize: {} bytes, {:.3} MiB",
+        filesize,
+        filesize as f64 / (1024.0 * 1024.0)
+    );
+    println!("#keys: {}", keys.len());
+    println!(
+        "#bytes/key: {:.3}",
+        (totlen_byte as f64) / (keys.len() as f64)
+    );
+    println!(
+        "#chars/key: {:.3}",
+        (totlen_char as f64) / (keys.len() as f64)
+    );
 }

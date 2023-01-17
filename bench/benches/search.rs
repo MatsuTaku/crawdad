@@ -69,6 +69,54 @@ fn add_exact_match_benches(
         });
     });
 
+    group.bench_function("std/BTreeMap", |b| {
+        let mut map = std::collections::BTreeMap::new();
+        for (i, key) in keys.iter().enumerate() {
+            map.insert(key, i as u32);
+        }
+        b.iter(|| {
+            let mut dummy = 0;
+            for query in queries {
+                dummy += map.get(query).unwrap();
+            }
+            if dummy == 0 {
+                panic!();
+            }
+        });
+    });
+
+    group.bench_function("std/HashMap", |b| {
+        let mut map = std::collections::HashMap::new();
+        for (i, key) in keys.iter().enumerate() {
+            map.insert(key, i as u32);
+        }
+        b.iter(|| {
+            let mut dummy = 0;
+            for query in queries {
+                dummy += map.get(query).unwrap();
+            }
+            if dummy == 0 {
+                panic!();
+            }
+        });
+    });
+
+    group.bench_function("hashbrown/HashMap", |b| {
+        let mut map = hashbrown::HashMap::new();
+        for (i, key) in keys.iter().enumerate() {
+            map.insert(key, i as u32);
+        }
+        b.iter(|| {
+            let mut dummy = 0;
+            for query in queries {
+                dummy += map.get(query).unwrap();
+            }
+            if dummy == 0 {
+                panic!();
+            }
+        });
+    });
+
     group.bench_function("yada", |b| {
         let data = yada::builder::DoubleArrayBuilder::build(
             &keys
@@ -114,14 +162,15 @@ fn add_exact_match_benches(
 fn add_enumerate_benches(group: &mut BenchmarkGroup<WallTime>, keys: &[String], texts: &[String]) {
     group.bench_function("crawdad/trie", |b| {
         let trie = crawdad::Trie::from_keys(keys).unwrap();
-        let mut searcher = trie.common_prefix_searcher();
+        let mut haystack = vec![];
         b.iter(|| {
             let mut dummy = 0;
             for text in texts {
-                searcher.update_haystack(text.chars());
-                for i in 0..searcher.len_chars() {
-                    for m in searcher.search(i) {
-                        dummy += m.end_bytes() + m.value() as usize;
+                haystack.clear();
+                haystack.extend(text.chars());
+                for i in 0..haystack.len() {
+                    for (v, j) in trie.common_prefix_search(haystack[i..].iter().copied()) {
+                        dummy += j + v as usize;
                     }
                 }
             }
@@ -133,14 +182,15 @@ fn add_enumerate_benches(group: &mut BenchmarkGroup<WallTime>, keys: &[String], 
 
     group.bench_function("crawdad/mptrie", |b| {
         let trie = crawdad::MpTrie::from_keys(keys).unwrap();
-        let mut searcher = trie.common_prefix_searcher();
+        let mut haystack = vec![];
         b.iter(|| {
             let mut dummy = 0;
             for text in texts {
-                searcher.update_haystack(text.chars());
-                for i in 0..searcher.len_chars() {
-                    for m in searcher.search(i) {
-                        dummy += m.end_bytes() + m.value() as usize;
+                haystack.clear();
+                haystack.extend(text.chars());
+                for i in 0..haystack.len() {
+                    for (v, j) in trie.common_prefix_search(haystack[i..].iter().copied()) {
+                        dummy += j + v as usize;
                     }
                 }
             }
@@ -202,7 +252,7 @@ fn add_enumerate_benches(group: &mut BenchmarkGroup<WallTime>, keys: &[String], 
     });
 
     group.bench_function("daachorse/bytewise", |b| {
-        let pma = daachorse::DoubleArrayAhoCorasick::new(keys).unwrap();
+        let pma = daachorse::DoubleArrayAhoCorasick::<u32>::new(keys).unwrap();
         b.iter(|| {
             let mut dummy = 0;
             for text in texts {
@@ -217,7 +267,7 @@ fn add_enumerate_benches(group: &mut BenchmarkGroup<WallTime>, keys: &[String], 
     });
 
     group.bench_function("daachorse/charwise", |b| {
-        let pma = daachorse::charwise::CharwiseDoubleArrayAhoCorasick::new(keys).unwrap();
+        let pma = daachorse::CharwiseDoubleArrayAhoCorasick::<u32>::new(keys).unwrap();
         b.iter(|| {
             let mut dummy = 0;
             for text in texts {

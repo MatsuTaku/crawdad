@@ -8,6 +8,9 @@ use core::cmp::Ordering;
 
 use alloc::vec::Vec;
 
+// The default parameter for free blocks to be searched in `find_base`.
+const DEFAULT_NUM_FREE_BLOCKS: u32 = 16;
+
 #[derive(Default)]
 struct Record {
     key: Vec<char>,
@@ -20,7 +23,6 @@ struct Suffix {
     value: u32,
 }
 
-#[derive(Default)]
 pub struct Builder {
     records: Vec<Record>,
     mapper: CodeMapper,
@@ -29,7 +31,24 @@ pub struct Builder {
     labels: Vec<u32>,
     head_idx: u32,
     block_len: u32,
+    num_free_blocks: u32,
     xchecker: BPXChecker,
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        Self {
+            records: vec![],
+            mapper: CodeMapper::default(),
+            nodes: vec![],
+            suffixes: None,
+            labels: vec![],
+            head_idx: 0,
+            block_len: 0,
+            num_free_blocks: DEFAULT_NUM_FREE_BLOCKS,
+            xchecker: BPXChecker::default(),
+        }
+    }
 }
 
 impl Builder {
@@ -68,6 +87,8 @@ impl Builder {
             })
             .collect();
 
+        self.records.sort_unstable_by(|a, b| a.key.cmp(&b.key));
+
         for &Record { key: _, value } in &self.records {
             if MAX_VALUE < value {
                 return Err(CrawdadError::scale("input value", MAX_VALUE));
@@ -79,7 +100,7 @@ impl Builder {
 
         make_prefix_free(&mut self.records)?;
 
-        self.block_len = get_block_len(self.mapper.alphabet_size());
+        self.block_len = self.mapper.alphabet_size().next_power_of_two().max(2);
         self.init_array();
         self.arrange_nodes(0, self.records.len(), 0, 0)?;
         self.finish();
@@ -92,13 +113,13 @@ impl Builder {
         if self.suffixes.is_some() {
             Err(CrawdadError::setup("minimal_prefix must be disabled."))
         } else {
-            let Builder { nodes, mapper, .. } = self;
+            let Self { nodes, mapper, .. } = self;
             Ok(Trie { nodes, mapper })
         }
     }
 
     pub fn release_mptrie(self) -> Result<MpTrie> {
-        let Builder {
+        let Self {
             mapper,
             mut nodes,
             suffixes,
@@ -241,7 +262,6 @@ impl Builder {
         for i2 in spos + 1..epos {
             let c2 = self.records[i2].key[depth];
             if c1 != c2 {
-                debug_assert!(c1 < c2);
                 let child_idx = base ^ self.mapper.get(c1).unwrap();
                 self.arrange_nodes(i1, i2, depth + 1, child_idx)?;
                 i1 = i2;
@@ -287,7 +307,6 @@ impl Builder {
         for i in spos + 1..epos {
             let c2 = self.records[i].key[depth];
             if c1 != c2 {
-                debug_assert!(c1 < c2);
                 self.labels.push(self.mapper.get(c1).unwrap());
                 c1 = c2;
             }
@@ -407,6 +426,11 @@ impl Builder {
             return Err(CrawdadError::scale("num_nodes", OFFSET_MASK));
         }
 
+        let num_blocks = old_len / self.block_len;
+        if self.num_free_blocks <= num_blocks {
+            self.close_block(num_blocks - self.num_free_blocks);
+        }
+
         for i in old_len..new_len {
             self.nodes.push(Node::default());
             self.set_next(i, i + 1);
@@ -428,6 +452,21 @@ impl Builder {
         }
 
         Ok(())
+    }
+
+    /// Note: Assumes all the previous blocks are closed.
+    fn close_block(&mut self, block_idx: u32) {
+        let beg_idx = block_idx * self.block_len;
+        let end_idx = beg_idx + self.block_len;
+        while self.head_idx < end_idx {
+            // Here, self.head_idx != INVALID_IDX is ensured,
+            // because INVALID_IDX is the maximum value in u32.
+            debug_assert_ne!(self.head_idx, INVALID_IDX);
+            let idx = self.head_idx;
+            self.fix_node(idx);
+            self.node_mut(idx).base = OFFSET_MASK;
+            self.node_mut(idx).check = OFFSET_MASK;
+        }
     }
 
     #[inline(always)]
@@ -480,7 +519,8 @@ impl Builder {
 }
 
 fn make_freqs(records: &[Record]) -> Result<Vec<u32>> {
-    let mut freqs = vec![];
+    let end_marker = usize::try_from(u32::from(END_MARKER)).unwrap();
+    let mut freqs = vec![0; end_marker + 1];
     for rec in records {
         for &c in &rec.key {
             let c = usize::try_from(u32::from(c)).unwrap();
@@ -490,13 +530,13 @@ fn make_freqs(records: &[Record]) -> Result<Vec<u32>> {
             freqs[c] += 1;
         }
     }
-    let end_marker = usize::try_from(u32::from(END_MARKER)).unwrap();
-    if freqs[end_marker] != 0 {
-        Err(CrawdadError::input("END_MARKER must not be contained."))
-    } else {
-        freqs[end_marker] = u32::MAX;
-        Ok(freqs)
+    if let Some(&freq) = freqs.get(end_marker) {
+        if freq != 0 {
+            return Err(CrawdadError::input("END_MARKER must not be contained."));
+        }
     }
+    freqs[end_marker] = u32::MAX;
+    Ok(freqs)
 }
 
 fn make_prefix_free(records: &mut [Record]) -> Result<()> {
@@ -522,9 +562,7 @@ fn make_prefix_free(records: &mut [Record]) -> Result<()> {
                     "records must not contain duplicated keys.",
                 ));
             }
-            Ordering::Greater => {
-                return Err(CrawdadError::input("records must be sorted."));
-            }
+            _ => unreachable!(),
         }
     }
     Ok(())
@@ -535,10 +573,4 @@ fn pop_end_marker(x: &[char]) -> Vec<char> {
         Some((&END_MARKER, elems)) => elems.to_vec(),
         _ => x.to_vec(),
     }
-}
-
-const fn get_block_len(alphabet_size: u32) -> u32 {
-    let max_code = alphabet_size - 1;
-    let shift = 32 - max_code.leading_zeros();
-    1 << shift
 }

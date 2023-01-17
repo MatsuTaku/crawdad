@@ -2,11 +2,13 @@
 use crate::builder::Builder;
 use crate::errors::Result;
 use crate::mapper::CodeMapper;
-use crate::{MappedChar, Match, Node, Statistics};
+use crate::Node;
 
 use crate::END_CODE;
 
 use alloc::vec::Vec;
+
+use core::mem;
 
 /// A standard trie form that often provides the fastest queries.
 pub struct Trie {
@@ -31,14 +33,13 @@ impl Trie {
     /// - `keys` is empty,
     /// - `keys` contains empty strings,
     /// - `keys` contains duplicate keys,
-    /// - `keys` is not sorted,
     /// - the scale of `keys` exceeds the expected one, or
     /// - the scale of the resulting trie exceeds the expected one.
     ///
     /// # Examples
     ///
     /// ```
-    /// use crawdad::{Trie, Statistics};
+    /// use crawdad::Trie;
     ///
     /// let keys = vec!["世界", "世界中", "国民"];
     /// let trie = Trie::from_keys(keys).unwrap();
@@ -66,14 +67,13 @@ impl Trie {
     /// - `records` is empty,
     /// - `records` contains empty strings,
     /// - `records` contains duplicate keys,
-    /// - keys in `records` are not sorted,
     /// - the scale of `keys` exceeds the expected one, or
     /// - the scale of the resulting trie exceeds the expected one.
     ///
     /// # Examples
     ///
     /// ```
-    /// use crawdad::{Trie, Statistics};
+    /// use crawdad::Trie;
     ///
     /// let records = vec![("世界", 2), ("世界中", 3), ("国民", 2)];
     /// let trie = Trie::from_records(records).unwrap();
@@ -86,6 +86,67 @@ impl Trie {
         K: AsRef<str>,
     {
         Builder::new().build_from_records(records)?.release_trie()
+    }
+
+    /// Serializes the data structure into a [`Vec`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crawdad::Trie;
+    ///
+    /// let keys = vec!["世界", "世界中", "国民"];
+    /// let trie = Trie::from_keys(&keys).unwrap();
+    /// let bytes = trie.serialize_to_vec();
+    /// ```
+    pub fn serialize_to_vec(&self) -> Vec<u8> {
+        let mut dest = Vec::with_capacity(self.io_bytes());
+        self.mapper.serialize_into_vec(&mut dest);
+        dest.extend_from_slice(&u32::try_from(self.nodes.len()).unwrap().to_le_bytes());
+        for node in &self.nodes {
+            dest.extend_from_slice(&node.serialize());
+        }
+        dest
+    }
+
+    /// Deserializes the data structure from a given byte slice.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - A source byte slice.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of the data structure and the slice not used for the deserialization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use crawdad::Trie;
+    ///
+    /// let keys = vec!["世界", "世界中", "国民"];
+    /// let trie = Trie::from_keys(&keys).unwrap();
+    ///
+    /// let bytes = trie.serialize_to_vec();
+    /// let (other, _) = Trie::deserialize_from_slice(&bytes);
+    ///
+    /// assert_eq!(trie.io_bytes(), other.io_bytes());
+    /// ```
+    pub fn deserialize_from_slice(source: &[u8]) -> (Self, &[u8]) {
+        let (mapper, mut source) = CodeMapper::deserialize_from_slice(source);
+        let nodes = {
+            let len = u32::from_le_bytes(source[..4].try_into().unwrap()) as usize;
+            source = &source[4..];
+            let mut nodes = Vec::with_capacity(len);
+            for _ in 0..len {
+                nodes.push(Node::deserialize(
+                    source[..Node::io_bytes()].try_into().unwrap(),
+                ));
+                source = &source[Node::io_bytes()..];
+            }
+            nodes
+        };
+        (Self { mapper, nodes }, source)
     }
 
     /// Returns a value associated with an input key if exists.
@@ -112,15 +173,10 @@ impl Trie {
     {
         let mut node_idx = 0;
         for c in key {
-            if let Some(mc) = self.mapper.get(c) {
-                if let Some(child_idx) = self.get_child_idx(node_idx, mc) {
-                    node_idx = child_idx;
-                } else {
-                    return None;
-                }
-            } else {
-                return None;
-            }
+            node_idx = self
+                .mapper
+                .get(c)
+                .and_then(|mc| self.get_child_idx(node_idx, mc))?;
         }
         if self.is_leaf(node_idx) {
             Some(self.get_value(node_idx))
@@ -131,14 +187,15 @@ impl Trie {
         }
     }
 
-    /// Returns a common prefix searcher.
+    /// Returns an iterator for common prefix search.
     ///
-    /// The searcher finds all occurrences of keys starting from an input haystack, and
-    /// the occurrences are reported as a sequence of [`Match`](crate::Match).
+    /// The iterator reports all occurrences of keys starting from an input haystack, where
+    /// an occurrence consists of its associated value and ending positoin in characters.
     ///
     /// # Examples
     ///
-    /// You can find all occurrences of keys in a haystack as follows.
+    /// You can find all occurrences of keys in a haystack by performing common prefix searches
+    /// at all starting positions.
     ///
     /// ```
     /// use crawdad::Trie;
@@ -146,51 +203,26 @@ impl Trie {
     /// let keys = vec!["世界", "世界中", "国民"];
     /// let trie = Trie::from_keys(&keys).unwrap();
     ///
-    /// let mut searcher = trie.common_prefix_searcher();
-    /// searcher.update_haystack("国民が世界中にて".chars());
-    ///
+    /// let haystack: Vec<char> = "国民が世界中にて".chars().collect();
     /// let mut matches = vec![];
-    /// for i in 0..searcher.len_chars() {
-    ///     for m in searcher.search(i) {
-    ///         matches.push((
-    ///             m.value(),
-    ///             m.start_chars(), m.end_chars(),
-    ///             m.start_bytes(), m.end_bytes(),
-    ///         ));
+    ///
+    /// for i in 0..haystack.len() {
+    ///     for (v, j) in trie.common_prefix_search(haystack[i..].iter().copied()) {
+    ///         matches.push((v, i..i + j));
     ///     }
     /// }
     ///
     /// assert_eq!(
     ///     matches,
-    ///     vec![(2, 0, 2, 0, 6), (0, 3, 5, 9, 15), (1, 3, 6, 9, 18)]
+    ///     vec![(2, 0..2), (0, 3..5), (1, 3..6)]
     /// );
     /// ```
-    pub const fn common_prefix_searcher(&self) -> CommonPrefixSearcher {
-        CommonPrefixSearcher {
+    pub const fn common_prefix_search<I>(&self, haystack: I) -> CommonPrefixSearchIter<I> {
+        CommonPrefixSearchIter {
+            haystack,
+            haystack_pos: 0,
             trie: self,
-            haystack: vec![],
-        }
-    }
-
-    /// Prepares a search haystack for common prefix search.
-    ///
-    /// # Arguments
-    ///
-    /// - `haystack`: Search haystack.
-    /// - `mapped`: Mapped haystack.
-    #[inline(always)]
-    fn map_haystack<I>(&self, haystack: I, mapped: &mut Vec<MappedChar>)
-    where
-        I: IntoIterator<Item = char>,
-    {
-        mapped.clear();
-        let mut end_bytes = 0;
-        for c in haystack {
-            end_bytes += c.len_utf8();
-            mapped.push(MappedChar {
-                c: self.mapper.get(c),
-                end_bytes,
-            });
+            node_idx: 0,
         }
     }
 
@@ -199,11 +231,8 @@ impl Trie {
         if self.is_leaf(node_idx) {
             return None;
         }
-        let child_idx = self.get_base(node_idx) ^ mc;
-        if self.get_check(child_idx) == node_idx {
-            return Some(child_idx);
-        }
-        None
+        Some(self.get_base(node_idx) ^ mc)
+            .filter(|&child_idx| self.get_check(child_idx) == node_idx)
     }
 
     #[inline(always)]
@@ -243,110 +272,57 @@ impl Trie {
         debug_assert!(self.is_leaf(node_idx));
         self.node_ref(node_idx).get_base()
     }
-}
 
-impl Statistics for Trie {
-    fn heap_bytes(&self) -> usize {
-        self.mapper.heap_bytes() + self.nodes.len() * core::mem::size_of::<Node>()
+    /// Returns the total amount of heap used by this automaton in bytes.
+    pub fn heap_bytes(&self) -> usize {
+        self.mapper.heap_bytes() + self.nodes.len() * mem::size_of::<Node>()
     }
 
-    fn num_elems(&self) -> usize {
+    /// Returns the total amount of bytes to serialize the data structure.
+    pub fn io_bytes(&self) -> usize {
+        self.mapper.io_bytes() + self.nodes.len() * Node::io_bytes() + mem::size_of::<u32>()
+    }
+
+    /// Returns the number of reserved elements.
+    pub fn num_elems(&self) -> usize {
         self.nodes.len()
     }
 
-    fn num_vacants(&self) -> usize {
+    /// Returns the number of vacant elements.
+    ///
+    /// # Note
+    ///
+    /// It takes `O(num_elems)` time.
+    pub fn num_vacants(&self) -> usize {
         self.nodes.iter().filter(|nd| nd.is_vacant()).count()
     }
 }
 
-/// Common prefix searcher created by [`Trie::common_prefix_searcher`].
-pub struct CommonPrefixSearcher<'t> {
-    trie: &'t Trie,
-    haystack: Vec<MappedChar>,
-}
-
-impl CommonPrefixSearcher<'_> {
-    /// Sets a search haystack.
-    pub fn update_haystack<I>(&mut self, haystack: I)
-    where
-        I: IntoIterator<Item = char>,
-    {
-        self.trie.map_haystack(haystack, &mut self.haystack);
-    }
-
-    /// Gets the haystack length in characters.
-    pub fn len_chars(&self) -> usize {
-        self.haystack.len()
-    }
-
-    /// Creates an iterator to search for the haystack in the given range.
-    pub fn search(&self, start: usize) -> CommonPrefixSearchIter {
-        let start_chars = start;
-        let start_bytes = if start_chars == 0 {
-            0
-        } else {
-            self.haystack[start_chars - 1].end_bytes
-        };
-        CommonPrefixSearchIter {
-            haystack: &self.haystack,
-            haystack_pos: start_chars,
-            trie: self.trie,
-            node_idx: 0,
-            start_chars,
-            start_bytes,
-        }
-    }
-}
-
 /// Iterator for common prefix search.
-pub struct CommonPrefixSearchIter<'k, 't> {
-    haystack: &'k [MappedChar],
+pub struct CommonPrefixSearchIter<'t, I> {
+    haystack: I,
     haystack_pos: usize,
     trie: &'t Trie,
     node_idx: u32,
-    start_chars: usize,
-    start_bytes: usize,
 }
 
-impl Iterator for CommonPrefixSearchIter<'_, '_> {
-    type Item = Match;
+impl<I> Iterator for CommonPrefixSearchIter<'_, I>
+where
+    I: Iterator<Item = char>,
+{
+    type Item = (u32, usize);
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
-        while self.haystack_pos < self.haystack.len() {
-            let mc = self.haystack[self.haystack_pos];
-            if let Some(c) = mc.c {
-                if let Some(child_idx) = self.trie.get_child_idx(self.node_idx, c) {
-                    self.node_idx = child_idx;
-                } else {
-                    self.haystack_pos = self.haystack.len();
-                    return None;
-                }
-            } else {
-                self.haystack_pos = self.haystack.len();
-                return None;
-            }
-
+        for c in self.haystack.by_ref() {
+            let mc = self.trie.mapper.get(c)?;
+            self.node_idx = self.trie.get_child_idx(self.node_idx, mc)?;
             self.haystack_pos += 1;
-
             if self.trie.is_leaf(self.node_idx) {
-                let end_chars = self.haystack_pos;
-                let end_bytes = self.haystack[end_chars - 1].end_bytes;
-                self.haystack_pos = self.haystack.len();
-                return Some(Match {
-                    value: self.trie.get_value(self.node_idx),
-                    range_chars: self.start_chars..end_chars,
-                    range_bytes: self.start_bytes..end_bytes,
-                });
+                return Some((self.trie.get_value(self.node_idx), self.haystack_pos));
             } else if self.trie.has_leaf(self.node_idx) {
                 let leaf_idx = self.trie.get_leaf_idx(self.node_idx);
-                let end_chars = self.haystack_pos;
-                let end_bytes = self.haystack[end_chars - 1].end_bytes;
-                return Some(Match {
-                    value: self.trie.get_value(leaf_idx),
-                    range_chars: self.start_chars..end_chars,
-                    range_bytes: self.start_bytes..end_bytes,
-                });
+                return Some((self.trie.get_value(leaf_idx), self.haystack_pos));
             }
         }
         None
@@ -380,25 +356,71 @@ mod tests {
         let keys = vec!["世界", "世界中", "世論調査", "統計調査"];
         let trie = Trie::from_keys(&keys).unwrap();
 
-        let mut searcher = trie.common_prefix_searcher();
-        searcher.update_haystack("世界中の統計世論調査".chars());
-
+        let haystack: Vec<_> = "世界中の統計世論調査".chars().collect();
         let mut matches = vec![];
-        for i in 0..searcher.len_chars() {
-            for m in searcher.search(i) {
-                matches.push((
-                    m.value(),
-                    m.start_chars(),
-                    m.end_chars(),
-                    m.start_bytes(),
-                    m.end_bytes(),
-                ));
+
+        for i in 0..haystack.len() {
+            for (v, j) in trie.common_prefix_search(haystack[i..].iter().copied()) {
+                matches.push((v, i..i + j));
             }
         }
+        assert_eq!(matches, vec![(0, 0..2), (1, 0..3), (2, 6..10)]);
+    }
 
-        assert_eq!(
-            matches,
-            vec![(0, 0, 2, 0, 6), (1, 0, 3, 0, 9), (2, 6, 10, 18, 30)]
-        );
+    #[test]
+    fn test_serialize() {
+        let keys = vec!["世界", "世界中", "世論調査", "統計調査"];
+        let trie = Trie::from_keys(&keys).unwrap();
+
+        let bytes = trie.serialize_to_vec();
+        assert_eq!(trie.io_bytes(), bytes.len());
+
+        let (other, remain) = Trie::deserialize_from_slice(&bytes);
+        assert!(remain.is_empty());
+
+        assert_eq!(trie.mapper, other.mapper);
+        assert_eq!(trie.nodes, other.nodes);
+    }
+
+    #[test]
+    fn test_empty_set() {
+        assert!(Trie::from_keys(&[""][0..0]).is_err());
+    }
+
+    #[test]
+    fn test_empty_char() {
+        assert!(Trie::from_keys([""]).is_err());
+    }
+
+    #[test]
+    fn test_empty_key() {
+        assert!(Trie::from_keys(["", "AAA"]).is_err());
+    }
+
+    #[test]
+    fn test_unsorted_keys() {
+        assert!(Trie::from_keys(["BB", "AA"]).is_ok());
+        assert!(Trie::from_keys(["AAA", "AA"]).is_ok());
+    }
+
+    #[test]
+    fn test_duplicate_keys() {
+        assert!(Trie::from_keys(["AA", "AA"]).is_err());
+    }
+
+    #[test]
+    fn test_common_prefix_search_null() {
+        let keys = vec!["世界\0", "世界中", "世間"];
+        let trie = Trie::from_keys(&keys).unwrap();
+
+        let haystack: Vec<_> = "世界\0中の人\0世間".chars().collect();
+        let mut matches = vec![];
+
+        for i in 0..haystack.len() {
+            for (v, j) in trie.common_prefix_search(haystack[i..].iter().copied()) {
+                matches.push((v, i..i + j));
+            }
+        }
+        assert_eq!(matches, vec![(0, 0..3), (2, 7..9)]);
     }
 }
